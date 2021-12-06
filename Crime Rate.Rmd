@@ -1,0 +1,837 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(comment = '>')
+```
+
+
+###Loading the libraries
+```{r}
+library(dlookr)
+library(ggplot2)
+library(dplyr)
+library(devtools)
+library(ggthemes)
+library(neuralnet)
+```
+
+
+##### 1. Data Description and Research Question
+
+#Introduction 
+#This dataset was taken from https://data.london.gov.uk/dataset/recorded_crime_summary and  https://data.london.gov.uk/dataset/lsoa-atlas. The Crime Rate dataset has over 13million rows with 7 variables. The dataset has a size of 888mb which is a large dataset with alot of rows whiles the Census dataset has 4837 rows with 277 variables respectively. The dataset contains the number of people in the united kingdom for the year 2011
+
+#Research Question
+i. Our research question is with what accuracy can we predict the sum of the cases of crimes occurred for the year 2011 in the United Kingdom (Supervised Learning).
+ii)Grouping of the sum of crimes according to their properties (Unsupervised Learning).
+
+
+###### 2. Data Preparation and Cleaning
+#Loading the crime rate and Census dataset
+```{r}
+Crimerate<-read.csv("data/Crime rate.csv")
+BigCensus<-read.csv("data/lsoa-data.csv")
+```
+
+
+```{r}
+str(Crimerate)
+str(BigCensus)
+```
+
+
+# Imputing missing values / removing incomplete instances in both datasets
+```{r}
+BigCensus <- na.omit(BigCensus)
+Crimerate <- na.omit(Crimerate)
+summary(BigCensus)
+summary(Crimerate)
+```
+
+#Renaming our column name for better understanding for Census
+```{r}
+colnames(BigCensus)[colnames(BigCensus) %in%
+c("Lower.Super.Output.Area","Names","Population.Density.Area..Hectares..","Country.of.Birth...United.Kingdom.2011","Household.Language...of.households.with.at.least.one.person.aged.16.or.over.with.English.as.a.main.language.2011","House.Prices.Median.Price.....2011","Adults.in.Employment...of.households.with.no.adults.in.employment..With.dependent.children.2011","Economic.Activity.Unemployment.Rate.2011","Qualifications...No.qualifications.2011","Household.Income..2011.12.Mean.Annual.Household.Income.estimate....")] <- c("lsoa_code","borough","Persons_per_hectare","Country_United_Kingdom","Households_with_English","Median_Price","Households_with_no_adults_Employed","Unemployment_Rate","No_Qualifications","Mean_Annual_Income")
+```
+
+#Subsetting Census 
+
+we will select some of the variables which will be  useful for our prediction. We consider data from the year 2011 because alot of crime where be committed in that year, therefore the year 2011 will be best for our analysis
+
+```{r}
+BigCensus1 = select(BigCensus,lsoa_code, borough,Persons_per_hectare,Country_United_Kingdom, Households_with_English,Median_Price,Households_with_no_adults_Employed,Unemployment_Rate,No_Qualifications,Mean_Annual_Income)
+```
+
+```{r}
+str(BigCensus1)
+```
+
+#Merging the two datasets 
+```{r}
+MergedCrimeRate <- merge(BigCensus1, Crimerate, by = c("lsoa_code"))
+summary(MergedCrimeRate)
+```
+
+We will only focus on 2011 crime rate we will therefore subset only 2011
+
+```{r}
+NewMergedCrimeRate<-subset(MergedCrimeRate,year ==2011)
+```
+
+#Median price is in character we will convert it to numerical
+```{r}
+NewMergedCrimeRate$Median_Price<-as.numeric((NewMergedCrimeRate$Median_Price))
+
+NewMergedCrimeRate <- na.omit(NewMergedCrimeRate)
+
+summary(NewMergedCrimeRate)
+```
+
+#We will then save the file and do further analysis using pandas library in python
+```{r}
+write.csv(NewMergedCrimeRate, "NewMergedCrimeRate.csv")
+```
+
+# Checking Outliers in Data set
+```{r}
+dlookr::diagnose_outlier(NewMergedCrimeRate)
+```
+
+#We will remove extreme outliers in our dataset  before doing the principal component analysis
+```{r}
+NewMergedCrimeRate_boxplot <- boxplot(NewMergedCrimeRate$Persons_per_hectare, plot = F)
+Persons_per_hectare_threshold <- min(NewMergedCrimeRate_boxplot$out)
+
+NewMergedCrimeRate_boxplot <- boxplot(NewMergedCrimeRate$Median_Price, plot = F)
+Median_Price_threshold <- min(NewMergedCrimeRate_boxplot$out)
+
+NewMergedCrimeRate_boxplot <- boxplot(NewMergedCrimeRate$value, plot = F)
+value_threshold <- min(NewMergedCrimeRate_boxplot$out)
+
+
+spending_filter <- NewMergedCrimeRate$Persons_per_hectare < Persons_per_hectare_threshold & NewMergedCrimeRate$Median_Price < Median_Price_threshold & NewMergedCrimeRate$value < value_threshold
+
+NewMergedCrimeRateout <- NewMergedCrimeRate[spending_filter,]
+```
+
+#We will check for duplicate
+```{r}
+which(duplicated(NewMergedCrimeRateout))
+```
+
+
+
+#### 3. Exploratory data Analysis
+
+#Summary statistics{#Summary_statistics}
+```{r}
+# get a summary report
+summary(NewMergedCrimeRateout)
+```
+
+#Graphical Analysis
+Univariate Representation of value(sum of the crimes for the year 2011)
+```{r}
+hist(NewMergedCrimeRateout$value)
+```
+We can see that alot of the crimerates are more concentrated at the left side of the graph.
+
+
+# Categorical Vrs Categorical using a stack bar chart
+
+```{r}
+ggplot(NewMergedCrimeRateout, aes(x=major_category,
+                          fill= minor_category))+
+  geom_bar(position = "stack")
+
+ggplot(NewMergedCrimeRateout, aes(x=borough.x,
+                          fill= minor_category))+
+  geom_bar(position = "stack")
+
+ggplot(NewMergedCrimeRateout, aes(x=borough.y,
+                          fill= minor_category))+
+  geom_bar(position = "stack")
+
+```
+
+#Multivariate
+```{r}
+ggplot(NewMergedCrimeRateout, aes(x= Persons_per_hectare,
+                          y= value,
+                          colour = major_category))+
+  geom_point()+
+  labs(title = "Number of crimes by person per hectare")
+
+
+ggplot(NewMergedCrimeRateout, aes(x= Country_United_Kingdom,
+                          y= value,
+                          colour = major_category))+
+  geom_point()+
+  labs(title = "Number of crimes by country of birth")
+```
+
+#Principal Component Analysis
+
+## Graphical analysis{#Graphical_analysis}
+
+#### Selection of of a subset of Rows and Columns for PCA computation
+
+
+```{r}
+NewMergedCrimeRate_PCA = select(NewMergedCrimeRateout,Persons_per_hectare,Country_United_Kingdom,Households_with_English,Median_Price,Households_with_no_adults_Employed,Unemployment_Rate,No_Qualifications,Mean_Annual_Income,value)
+summary(NewMergedCrimeRate_PCA)
+
+```
+
+
+```{r}
+NewMergedCrimeRate_PCA <-NewMergedCrimeRate_PCA[1:400,]
+
+NewMergedCrimeRate_PCA <- na.omit(NewMergedCrimeRate_PCA)
+
+summary(NewMergedCrimeRate_PCA)
+```
+
+### Checking for correlation
+```{r}
+cor(NewMergedCrimeRate_PCA)
+```
+
+#### Graphical analysis{#Graphical_analysis}
+```{r}
+# generate a histogram for each variable (and show them on the same page)
+#   note: titles and x labels are set to the name of the relevant variable
+opar <- par()
+par(mfrow = c(2,3))
+hist(NewMergedCrimeRate_PCA[, 1], main = names(NewMergedCrimeRate_PCA)[1], xlab = names(NewMergedCrimeRate_PCA)[1], xlim = c(0,100))
+hist(NewMergedCrimeRate_PCA[, 2], main = names(NewMergedCrimeRate_PCA)[2], xlab = names(NewMergedCrimeRate_PCA)[2], xlim = c(0,100))
+hist(NewMergedCrimeRate_PCA[, 3], main = names(NewMergedCrimeRate_PCA)[3], xlab = names(NewMergedCrimeRate_PCA)[3], xlim = c(0,100))
+hist(NewMergedCrimeRate_PCA[, 4], main = names(NewMergedCrimeRate_PCA)[4], xlab = names(NewMergedCrimeRate_PCA)[4], xlim = c(0,100))
+hist(NewMergedCrimeRate_PCA[, 5], main = names(NewMergedCrimeRate_PCA)[5], xlab = names(NewMergedCrimeRate_PCA)[5], xlim = c(0,100))
+hist(NewMergedCrimeRate_PCA[, 6], main = names(NewMergedCrimeRate_PCA)[6], xlab = names(NewMergedCrimeRate_PCA)[6], xlim = c(0,100))
+hist(NewMergedCrimeRate_PCA[, 7], main = names(NewMergedCrimeRate_PCA)[7], xlab = names(NewMergedCrimeRate_PCA)[7], xlim = c(0,100))
+hist(NewMergedCrimeRate_PCA[, 8], main = names(NewMergedCrimeRate_PCA)[8], xlab = names(NewMergedCrimeRate_PCA)[8], xlim = c(0,100))
+hist(NewMergedCrimeRate_PCA[, 9], main = names(NewMergedCrimeRate_PCA)[9], xlab = names(NewMergedCrimeRate_PCA)[9], xlim = c(0,100))
+par(opar)
+
+# generate a density plot for each variable (and show them on the same page)
+#   note: kernel density estimation may have tails outside the variable range!
+opar <- par()
+par(mfrow = c(2,3))
+plot(density(NewMergedCrimeRate_PCA[, 1]), main = names(NewMergedCrimeRate_PCA)[1], xlab = names(NewMergedCrimeRate_PCA)[1])
+plot(density(NewMergedCrimeRate_PCA[, 2]), main = names(NewMergedCrimeRate_PCA)[2], xlab = names(NewMergedCrimeRate_PCA)[2])
+plot(density(NewMergedCrimeRate_PCA[, 3]), main = names(NewMergedCrimeRate_PCA)[3], xlab = names(NewMergedCrimeRate_PCA)[3])
+plot(density(NewMergedCrimeRate_PCA[, 4]), main = names(NewMergedCrimeRate_PCA)[4], xlab = names(NewMergedCrimeRate_PCA)[4])
+plot(density(NewMergedCrimeRate_PCA[, 5]), main = names(NewMergedCrimeRate_PCA)[5], xlab = names(NewMergedCrimeRate_PCA)[5])
+plot(density(NewMergedCrimeRate_PCA[, 6]), main = names(NewMergedCrimeRate_PCA)[6], xlab = names(NewMergedCrimeRate_PCA)[6])
+plot(density(NewMergedCrimeRate_PCA[, 7]), main = names(NewMergedCrimeRate_PCA)[7], xlab = names(NewMergedCrimeRate_PCA)[7])
+plot(density(NewMergedCrimeRate_PCA[, 8]), main = names(NewMergedCrimeRate_PCA)[8], xlab = names(NewMergedCrimeRate_PCA)[8])
+plot(density(NewMergedCrimeRate_PCA[, 9]), main = names(NewMergedCrimeRate_PCA)[9], xlab = names(NewMergedCrimeRate_PCA)[9])
+par(opar)
+
+# generate a boxplot graph including horizontal background dashed lines
+#   note: this can be done by
+#     1. plotting an empty graph, i.e. with white boxes
+#     2. adding the background dashed lines
+#     3. plotting the coloured boxplot with the option add = T
+opar <- par()
+boxplot(
+  NewMergedCrimeRate_PCA,
+  border = 'white',
+  yaxt = 'n'
+)
+abline(h = seq(0,100,10), lty = 'dashed', lwd = 2, col = 'darkgrey')
+boxplot(
+  NewMergedCrimeRate_PCA,
+  border = 'blue',
+  yaxt = 'n',
+  add = T
+)
+axis(2, seq(0,100,10))
+par(opar)
+```
+
+
+####  Principal Component Analysis
+
+```{r}
+# perform PCA on the NYC_Crime_Housing_clean.cont dataset
+NewMergedCrimeRate_PCA1 <- prcomp(NewMergedCrimeRate_PCA, center = T, scale. = T)
+
+# inspect the attributes of the PCA object returned by prcomp
+attributes(NewMergedCrimeRate_PCA1)
+```
+
+
+#### Visual analysis of PCA results
+```{r}
+# calculate the proportion of explained variance (PEV) from the std values
+pc_NewMergedCrimeRate_var <- NewMergedCrimeRate_PCA1$sdev^2
+pc_NewMergedCrimeRate_var
+pc_NewMergedCrimeRate_PEV<- pc_NewMergedCrimeRate_var/ sum(pc_NewMergedCrimeRate_var)
+pc_NewMergedCrimeRate_PEV
+
+# plot the variance per PC
+plot(NewMergedCrimeRate_PCA1)
+
+# plot the cumulative value of PEV for increasing number of additional PCs
+#   note: add an 80% threshold line to inform the feature extraction
+#     according to the plot the first 3 PCs should be selected
+opar <- par()
+plot(
+  cumsum(pc_NewMergedCrimeRate_PEV),
+  ylim = c(0,1),
+  xlab = 'PC',
+  ylab = 'cumulative PEV',
+  pch = 20,
+  col = 'orange'
+)
+abline(h = 0.8, col = 'red', lty = 'dashed')
+par(opar)
+
+# get and inspect the loadings for each PC
+#   note: loadings are reported as a rotation matrix (see lecture)
+pc_NewMergedCrimeRate_PCA1_loadings <- NewMergedCrimeRate_PCA1$rotation
+pc_NewMergedCrimeRate_PCA1_loadings
+
+# plot the loadings for the first three PCs as a barplot
+#   note: two vectors for colours and labels are created for convenience
+#     for details on the other parameters see the help for barplot and legend
+opar <- par()
+colvector = c('red', 'orange', 'yellow', 'green', 'cyan', 'blue')
+labvector = c('PC1', 'PC2', 'PC3')
+barplot(
+  pc_NewMergedCrimeRate_PCA1_loadings[,c(1:3)],
+  beside = T,
+  yaxt = 'n',
+  names.arg = labvector,
+  col = colvector,
+  ylim = c(-1,1),
+  border = 'white',
+  ylab = 'loadings'
+)
+axis(2, seq(-1,1,0.1))
+legend(
+  'bottomright',
+  bty = 'n',
+  col = colvector,
+  pch = 15,
+  row.names(pc_NewMergedCrimeRate_PCA1_loadings)
+)
+par(opar)
+```
+
+
+
+```{r}
+# generate a biplot for each pair of important PCs (and show them on the same page)
+#   note: the option choices is used to select the PCs - default is 1:2
+opar = par()
+par(mfrow = c(2,2))
+biplot(
+  NewMergedCrimeRate_PCA1,
+  scale = 0,
+  col = c('grey40','orange')
+)
+biplot(
+  NewMergedCrimeRate_PCA1,
+  choices = c(1,3),
+  scale = 0,
+  col = c('grey40','orange')
+)
+biplot(
+  NewMergedCrimeRate_PCA1,
+  choices = c(2,3),
+  scale = 0,
+  col = c('grey40','orange')
+)
+par(opar)
+
+# the space of the first three PCs is better explored interactively...
+#   ...using a function from the pca3d package
+# first install pca3d
+if(require(pca3d) == FALSE){
+    install.packages('pca3d')
+}
+# then plot and explore the data by rotating/zoom with the mouse
+pca3d::pca3d(NewMergedCrimeRate_PCA1, show.labels = T)
+
+# and save a snapshot of the view in png format
+pca3d::snapshotPCA3d('NewMergedCrimeRate_PCA1_3D.png')
+
+```
+
+
+#### Selection of of a subset of Rows and Columns for Cluster Analysis computation
+Due to low processing speed of our laptop we sample some of the rows for the PCA and clustering analysis
+We will therefore consider the first 400 rows
+
+```{r}
+NewMergedCrimeRate_CA<-NewMergedCrimeRate_PCA[1:400,]
+```
+
+
+#### Cluster analysis (agglomerative hierarchical and k-means){#Cluster_analysis}
+```{r}
+### hierarchical clustering - complete linkage
+
+dist_NewMergedCrimeRate_CA <- dist(NewMergedCrimeRate_CA, method = 'euclidian')
+hc_NewMergedCrimeRate_CA<- hclust(dist_NewMergedCrimeRate_CA, method = 'complete')
+### plot the associated dendrogram
+plot(hc_NewMergedCrimeRate_CA, hang = -0.1)
+### select a partition containing 3 groups
+hc_cluster_id_NewMergedCrimeRate_CA <- cutree(hc_NewMergedCrimeRate_CA, k = 3)
+### k-means with 3 groups
+k_NewMergedCrimeRate_CA = kmeans(NewMergedCrimeRate_CA, 3)
+k_cluster_id_NewMergedCrimeRate_CA <- k_NewMergedCrimeRate_CA$cluster
+```
+
+
+
+##### Evaluation of cluster results{#Evaluation_cluster_results}
+```{r}
+### silhoutte score
+sil_hc_NewMergedCrimeRate_CA <- cluster::silhouette(hc_cluster_id_NewMergedCrimeRate_CA, dist_NewMergedCrimeRate_CA)
+sil_k_NewMergedCrimeRate_CA <- cluster::silhouette(k_cluster_id_NewMergedCrimeRate_CA, dist_NewMergedCrimeRate_CA)
+
+### silhoutte plots
+###   note: use border = 'grey' to be able to see the plot lines
+opar <- par()
+par(mfrow = c(2,1))
+plot(sil_hc_NewMergedCrimeRate_CA, border = 'grey')
+plot(sil_k_NewMergedCrimeRate_CA, border = 'grey')
+par(opar)
+
+###  get the attributes averages per cluster
+###   for the best clustering result (according to the silhoutte plots)
+###   and join the results in a data frame
+Crime_Rate_1 <- apply(NewMergedCrimeRate_CA[k_cluster_id_NewMergedCrimeRate_CA == 1,-1], 2, mean)
+Crime_Rate_2 <- apply(NewMergedCrimeRate_CA[k_cluster_id_NewMergedCrimeRate_CA == 2,-1], 2, mean)
+Crime_Rate_3 <- apply(NewMergedCrimeRate_CA[k_cluster_id_NewMergedCrimeRate_CA == 3,-1], 2, mean)
+Crime_Rate_cluster_averages <- rbind(Crime_Rate_1, Crime_Rate_2, Crime_Rate_3)
+Crime_Rate_cluster_averages
+```
+
+
+#### 4. Machine Learning Prediction 
+
+Before we begin with our prediction, we will like to do multiple regression to see whether some of the variables correlates with each other or not
+
+```{r}
+#Multiple regression for the Merged dataset
+NewMergedCrimeRateout.lm<-lm(NewMergedCrimeRateout$value~ NewMergedCrimeRateout$Persons_per_hectare+ NewMergedCrimeRateout$Country_United_Kingdom+NewMergedCrimeRateout$Households_with_English+NewMergedCrimeRateout$Median_Price+NewMergedCrimeRateout$Households_with_no_adults_Employed+NewMergedCrimeRateout$Unemployment_Rate+NewMergedCrimeRateout$No_Qualifications+NewMergedCrimeRateout$Mean_Annual_Income)
+summary(NewMergedCrimeRateout.lm)
+
+plot(NewMergedCrimeRateout.lm)
+```
+ 
+By using the multiple regression we can see that the variables are highly significant to each other.
+
+
+####Neural Networks using Regression
+
+# Due to low processing speed of our laptop and also due to the high volume of rows and columns our dataset contains we will sample the first 40000 rows for all our prediction
+```{r}
+NewMergedCrimeRateReg<-NewMergedCrimeRateout[1:40000,]
+```
+
+```{r}
+#code to check which row is duplicated in our dataset
+which(duplicated(NewMergedCrimeRateReg))
+```
+
+```{r}
+str(NewMergedCrimeRateReg)
+```
+
+
+####Checking and cleaning any missing values 
+
+```{r}
+any(is.na(NewMergedCrimeRateReg[]))
+colSums(is.na(NewMergedCrimeRateReg))
+```
+
+We will then subset our newly merged numerical dataset for the neural Networks
+
+```{r}
+CrimeRateNNReg = select(NewMergedCrimeRateReg,Persons_per_hectare,Country_United_Kingdom,Households_with_English,Median_Price,Households_with_no_adults_Employed,Unemployment_Rate,No_Qualifications,Mean_Annual_Income,value  )
+summary(CrimeRateNNReg)
+
+NewMergedCrimeRate <- na.omit(NewMergedCrimeRate)
+```
+
+```{r}
+library(neuralnet)
+```
+
+#### 2. Data preparation{#Data_preparation}
+```{r}
+
+#Value is equal to the sum of crimes for the year 2011
+
+# transform the data using a min-max function
+#   note: this will make the data more suitable for use with NN
+#     as the attribute values will be on a narrow interval around zero
+# first define a MinMax function
+MinMax <- function(x){
+ tx <- (x - min(x)) / (max(x) - min(x))
+  return(tx)
+}
+
+
+# then apply the function to each column of the data set
+#   note: the apply function returns a matrix
+CrimeRateNNReg_minmax <- apply(CrimeRateNNReg, 2, MinMax)
+
+# the matrix needs to be 'cast' into a data frame
+#   note: R has an as.data.frame function for this purpose
+CrimeRateNNReg_minmax <- as.data.frame(CrimeRateNNReg_minmax)
+
+# create a 70/30 training/test set split
+n_rows <- nrow(CrimeRateNNReg_minmax)
+# sample 70% (n_rows * 0.7) indices in the ranges 1:nrows
+training_idx <- sample(n_rows, n_rows * 0.7)
+# filter the data frame with the training indices (and the complement)
+training_CrimeRateNNReg_minmax <- CrimeRateNNReg_minmax[training_idx,]
+test_CrimeRateNNReg_minmax <- CrimeRateNNReg_minmax[-training_idx,]
+```
+
+
+#### 3. Neural network training{#Neural_network_training}
+```{r}
+# define a formula for predicting value
+CrimeRateNNReg_formula = value ~ Persons_per_hectare + Country_United_Kingdom + Households_with_English + Median_Price + Households_with_no_adults_Employed + Unemployment_Rate + No_Qualifications + Mean_Annual_Income 
+  
+# train a neural network with 1 hidden node
+CrimeRateNNReg_nn_1 <- neuralnet(CrimeRateNNReg_formula, hidden =1,linear.output = TRUE, threshold = 0.5, stepmax=4e+07,data = training_CrimeRateNNReg_minmax)
+
+
+# train a neural network with 5 nodes on one hidden layer
+#   note: the number of layers is set with the hidden option parameter
+CrimeRateNNReg_nn_2 <- neuralnet(CrimeRateNNReg_formula, hidden =5, linear.output = TRUE, threshold = 0.5, stepmax=8e+07, data = training_CrimeRateNNReg_minmax)
+
+# train a neural network with 5 nodes on two hidden layer
+#   note: the number of layers is set with the hidden option parameter
+CrimeRateNNReg_nn_55 <- neuralnet(CrimeRateNNReg_formula, hidden = c(5,5),linear.output = TRUE, threshold = 0.5, stepmax=8e+07, data = training_CrimeRateNNReg_minmax)
+
+
+# plot the two neural networks and compare their structure
+plot(CrimeRateNNReg_nn_1)
+plot(CrimeRateNNReg_nn_2)
+plot(CrimeRateNNReg_nn_55)
+```
+
+#### 4. Neural network prediction{#Neural_network_prediction}
+```{r}
+# compute the prediction for each neural network
+#   note: the strength attribute (column 1) is excluded from the test data set
+pred_CrimeRateNNReg_nn_1 <- neuralnet::compute(CrimeRateNNReg_nn_1, test_CrimeRateNNReg_minmax[,-9])
+pred_CrimeRateNNReg_nn_2 <- neuralnet::compute(CrimeRateNNReg_nn_2, test_CrimeRateNNReg_minmax[,-9])
+pred_CrimeRateNNReg_nn_55 <- neuralnet::compute(CrimeRateNNReg_nn_55, test_CrimeRateNNReg_minmax[,-9])
+
+# create a table with actual values and the three predictions
+#   note: predicted values are stored as net_result attribute of the prediction object
+CrimeRateNNReg_results <- data.frame(
+  actual = test_CrimeRateNNReg_minmax$value,
+ nn_1 = pred_CrimeRateNNReg_nn_1$net.result,
+  nn_2 = pred_CrimeRateNNReg_nn_2$net.result,
+  nn_55 = pred_CrimeRateNNReg_nn_55$net.result
+)
+# calculate the correlation between actual and predicted values to identify the best predictor
+cor(CrimeRateNNReg_results[,'actual'], CrimeRateNNReg_results[,c("nn_1","nn_2","nn_55")])
+
+# plot actual vs predicted values for the worst (blue) and best predictor (orange)
+#   note: points is used to add points on a graph
+plot(
+  CrimeRateNNReg_results$actual,
+  CrimeRateNNReg_results$nn_1,
+  col = 'blue',
+  xlab = 'actual value',
+  ylab = 'predicted value',
+  xlim = c(0,1),
+  ylim = c(0,1)
+)
+points(
+ CrimeRateNNReg_results$actual,
+  CrimeRateNNReg_results$nn_2,
+  col = 'orange'
+)
+abline(a = 0, b = 1, col = 'red', lty = 'dashed')
+legend(
+  'topleft',
+  c('nn_1', 'nn_55'),
+  pch = 1,
+  col = c('blue', 'orange'),
+  bty = 'n'
+)
+```
+
+
+#####Classification Problem using Random Forest
+We will use our existing merged dataset for the classification problem in order for us to properly group our target variable into three classes without removing the outliers because when will remove the outliers before grouping it, it does not bringing all the classes for us to group it.
+```{r}
+NewMergedCrimeRate$value <-as.factor(NewMergedCrimeRate$value)
+table(NewMergedCrimeRate$value)
+```
+
+####Recoding into three classes using the levels
+```{r}
+NewMergedCrimeRate$value <- recode(NewMergedCrimeRate$value,
+                             "1" = "low",
+                             "2" = "medium",
+                             "3" = "high",
+                             "4" = "high",
+                             "5" = "high",
+                             "6" = "high",
+                             "7" = "high",
+                             "8" = "high",
+                             "9" = "high",
+                             "10" = "high",
+                             "11" = "high",
+                             "12" = "high",
+                             "13" = "high",
+                             "14" = "high",
+                             "15" = "high"
+                             
+)
+
+```
+
+
+####Further grouping of our levels into three class
+```{r}
+NewClassGroup<-NewMergedCrimeRate[NewMergedCrimeRate$value==c("low","medium","high"),]
+NewClassGroup$value
+
+mean(NewClassGroup$value)
+levels(NewClassGroup$value)
+levels(NewClassGroup$value)
+summary(NewClassGroup$value)
+ NewClassGroup$value<- droplevels(NewClassGroup$value)
+
+
+levels(NewClassGroup$value)
+str(NewClassGroup$value)
+```
+
+
+###Random Forest 
+```{r}
+RandomClas = select(NewClassGroup,Persons_per_hectare,Country_United_Kingdom,Households_with_English,Households_with_no_adults_Employed,Median_Price,Unemployment_Rate,No_Qualifications,Mean_Annual_Income,value)
+
+summary(RandomClas)
+
+RandomClas$value<-as.integer(RandomClas$value)
+RandomClas$value<-as.factor(RandomClas$value)
+
+```
+
+####Selection of 40000n rows for all our prediction
+```{r}
+RandomClas<-RandomClas[1:40000,]
+
+table(RandomClas$value)
+
+```
+
+#### Random forest packages{#Install_packages}
+```{r}
+# randomForest packages from CRAN
+
+if(require(randomForest) == FALSE){
+  install.packages('randomForest')
+  library(randomForest)
+}
+```
+
+#### 2. Data preparation{#Data_preparation}
+```{r}
+
+# set random seed
+set.seed(1999)
+# create a 70/30 training/test set split
+n_rows <- nrow(RandomClas)
+# sample 70% (n_rows * 0.7) indices in the ranges 1:nrows
+training_idx <- sample(n_rows, n_rows * 0.7)
+# filter the data frame with the training indices (and the complement)
+training_RandomClas <- RandomClas[training_idx,]
+test_RandomClas <- RandomClas[-training_idx,]
+```
+
+```{r}
+RandomClass_formula = value ~ Persons_per_hectare + Country_United_Kingdom + Households_with_English + Median_Price + Households_with_no_adults_Employed + Unemployment_Rate + No_Qualifications + Mean_Annual_Income 
+```
+
+
+#### 5. Random forest training{#Random_forest_training}
+```{r}
+# train a model with random forest
+#   note: number of trees is set to 500
+#     and calculation of attributes importance is requested
+rf_RandomClas<- randomForest(RandomClass_formula, ntree = 500, importance = T, data = training_RandomClas)
+
+# plot the error rates
+#   note: the labels for the legend are extracted from the rf object
+#     and they include Out-of-bag (OOB) error. OOB is the average error
+#     calculated for each point using only trees that were not trained
+#     using that point
+plot(rf_RandomClas)
+legend('topright', colnames(rf_RandomClas$err.rate), bty = 'n', lty = c(1,2,3), col = c(1:3))
+
+# plot the variable importance according to the
+varImpPlot(rf_RandomClas, type = 1)
+```
+
+#### 6. Random forest prediction{#Random_forest_prediction}
+```{r}
+# compute the prediction for the random forest model
+#   note: the Sales attribute (column 1) is excluded from the test data set
+rf_RandomClas_pred <- predict(rf_RandomClas, test_RandomClas[,-9], type= "class")
+
+# create a contingency table for the actual VS predicted for the random forest model
+rf_results_table <- table(rf = rf_RandomClas_pred,  actual = test_RandomClas$value)
+rf_results_table
+
+# calculate accuracy from each contigency table
+#   as sum of diagonal elements over sum of the matrix values
+acc_rf <- sum(diag(rf_results_table)) / sum(rf_results_table)
+acc_rf
+```
+
+#####Performance and Evaluation
+
+
+#### Install caret, rpart and ROCR packages{#Install_packages}
+```{r}
+# install the caret, rpart and ROCR packages from CRAN
+if(require(caret) == FALSE){
+  install.packages('caret', dependencies = TRUE)
+  library(caret)
+}
+if(require(rpart) == FALSE){
+  install.packages('rpart')
+  library(rpart)
+}
+if(require(ROCR) == FALSE){
+  install.packages('ROCR')
+  library(ROCR)
+}
+
+
+```
+
+#### Data preparation{#Data_preparation}
+```{r}
+
+# set random seed
+set.seed(1999)
+# create a 70/30 training/test set split
+n_rows <- nrow(RandomClas)
+# sample 70% (n_rows * 0.7) indices in the ranges 1:nrows
+training_idx <- sample(n_rows, n_rows * 0.7)
+# filter the data frame with the training indices (and the complement)
+training_RandomClas <- RandomClas[training_idx,]
+test_RandomClas <- RandomClas[-training_idx,]
+```
+
+
+#####Random forest
+```{r}
+# define a formula for predicting value
+tvalue_formula <- reformulate(names(training_RandomClas[, -9]), response = 'value')
+
+# set the parameters for tuning to 9-fold CV
+ctrl_parameters <- trainControl(method = 'CV', number = 9)
+
+# check the tunable parameter available for rpart
+#   note: the algorithm has a parameter for tree complexity
+modelLookup('rpart')
+```
+
+
+#### Random forests training + tuning{#Random_Forest_tree_training_tuning}
+```{r}
+# check the tunable parameter available for rf
+modelLookup('rf')
+
+# train a Random forests model using caret train function
+#   note: rf is the algorithm available in the randomForest package
+#     and the training parameters are passed as option trControl
+tvalue_rf <- train(tvalue_formula, data = training_RandomClas, method = "rf", trControl = ctrl_parameters)
+
+# inspect the result of the training
+tvalue_rf
+```
+
+
+#### Prediction{#Prediction}
+```{r}
+# compute prediction with the Random forests model
+#   note: combine actual, predicted and probability prediction in a data frame
+#     by using cbind and the 'type' argument in the predict function
+tvalue_rf_predict <-  cbind(
+  actual = test_RandomClas$value,
+  predicted = predict(tvalue_rf, test_RandomClas[, -9], type = 'raw'),
+  predict(tvalue_rf, test_RandomClas[, -9], type = 'prob')
+)
+```
+
+
+#### 6. Performance evaluation{#Performance_evaluation}
+```{r}
+# generate a confusion matrix for the each predicted model
+#   and inspect them: the caret confusionMatrix function
+#   returns also Accuracy, Kappa, Sensitivity and Specificity
+#     note: the positive class should be explicitly declared
+#       with the argument 'positive'
+rf_confmat <- confusionMatrix(data = tvalue_rf_predict$predicted, reference = tvalue_rf_predict$actua, positive = "1")
+rf_confmat
+
+# prepare two data frames to generate a ROC curve:
+#   a data frame with the probability scores for the prediction of True
+#   a data frame with the actual classes (repeated twice)
+tvalue_models_prob <- data.frame(
+  rf = tvalue_rf_predict[,3]
+)
+tvalue_label <- data.frame(
+  rf = tvalue_rf_predict$actual== "1"
+)
+
+# ROCR requires to create a prediction and a performance object
+#   note: the performance object can be created for different measures
+#     e.g. TPR and FPR in this case
+tvalue_ROC_pred = prediction(tvalue_models_prob, tvalue_label)
+tvalue_ROC_perf = performance(tvalue_ROC_pred, "tpr", "fpr")
+
+# plot the ROC curve for the two methods
+opar <- par()
+par(pty = 's')
+plot(
+ tvalue_ROC_perf,
+ col = as.list(c("orange", "blue"))
+)
+abline(a = 0, b = 1, lty = 2, col = 'red')
+legend(
+  "bottomright",
+  names(tvalue_models_prob),
+  col = c("orange", "blue"),
+  lty = 1,
+  bty = 'n'
+)
+par <- opar
+```
+
+####Calculating the performance area under the curve.
+```{r}
+perf.auc = performance(tvalue_ROC_pred, measure = "auc")
+str(perf.auc)
+
+unlist(perf.auc@y.values)
+```
+
